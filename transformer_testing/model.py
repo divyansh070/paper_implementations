@@ -85,6 +85,34 @@ class MultiHeadAttentionBlock(nn.Module):
 
 
         x , attention_scores=MultiHeadAttentionBlock.attention(q,k,v,mask,self.dropout)
+        x = x.transpose(1, 2).contiguous().view(x.shape[0], -1, self.h * self.d_model)
+        return self.wo(x)
+
+
+class ResidualConnection(nn.Module):
+    
+        def __init__(self, features: int, dropout: float) -> None:
+            super().__init__()
+            self.dropout = nn.Dropout(dropout)
+            self.norm = LayerNormalization(features)
+    
+        def forward(self, x, sublayer):
+            return x + self.dropout(sublayer(self.norm(x)))
+
+
+    
+class Encoder(nn.Module):
+
+    def __init__(self, features: int, layers: nn.ModuleList) -> None:
+        super().__init__()
+        self.layers = layers
+        self.norm = LayerNormalization(features)
+
+    def forward(self, x, mask):
+        for layer in self.layers:
+            x = layer(x, mask)
+        return self.norm(x)
+
 
 class EncoderBlock(nn.Module):
 
@@ -98,3 +126,40 @@ class EncoderBlock(nn.Module):
         x = self.residual_connections[0](x, lambda x: self.self_attention_block(x, x, x, src_mask))
         x = self.residual_connections[1](x, self.feed_forward_block)
         return x
+
+class DecoderBlock(nn.Module):
+    def __init__(self, features ,self_attention_block:MultiHeadAttentionBlock, cross_attention_block:MultiHeadAttentionBlock,feed_forward_block: FeedForwardBlock,dropout):
+        super().__init__()
+        self.self_attention_block = self_attention_block
+        self.cross_attention_block = cross_attention_block
+        self.feed_forward_block = feed_forward_block
+        self.residual_connections = nn.ModuleList([ResidualConnection(features, dropout) for _ in range(3)])
+    def forward(self, x, encoder_output, src_mask, tgt_mask):
+            x = self.residual_connections[0](x, lambda x: self.self_attention_block(x, x, x, tgt_mask))
+            x = self.residual_connections[1](x, lambda x: self.cross_attention_block(x, encoder_output, encoder_output, src_mask))
+            x = self.residual_connections[2](x, self.feed_forward_block)
+            return x
+    
+class Decoder(nn.Module):
+
+    def __init__(self, features: int, layers: nn.ModuleList) -> None:
+        super().__init__()
+        self.layers = layers
+        self.norm = LayerNormalization(features)
+
+    def forward(self, x, encoder_output, src_mask, tgt_mask):
+        for layer in self.layers:
+            x = layer(x, encoder_output, src_mask, tgt_mask)
+        return self.norm(x)
+
+
+
+class ProjectionLayer(nn.Module):
+
+    def __init__(self, d_model, vocab_size) -> None:
+        super().__init__()
+        self.proj = nn.Linear(d_model, vocab_size)
+
+    def forward(self, x) -> None:
+        # (batch, seq_len, d_model) --> (batch, seq_len, vocab_size)
+        return self.proj(x)
